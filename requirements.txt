@@ -6,3 +6,4 @@ pydantic-settings>=2.2
 APScheduler>=3.10,<4
 edge-tts>=6.1
 anthropic>=0.40
+aiosqlite>=0.20

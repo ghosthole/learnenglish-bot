@@ -35,7 +35,34 @@
    Миграции базы применяются автоматически при старте контейнера.
 4. Напиши боту `/start`.
 
-## Запуск без Docker
+## Самый простой запуск на Mac (без Docker и без PostgreSQL)
+
+Для одного пользователя хватит SQLite: база — это просто файл `bot.sqlite3` в папке проекта.
+
+```bash
+# 1. Python 3.10+ (встроенный в macOS python3 обычно 3.9 — он не подойдёт)
+brew install python@3.12        # если нет Homebrew: https://brew.sh
+
+# 2. Код и зависимости
+git clone https://github.com/ghosthole/learnenglish-bot.git
+cd learnenglish-bot
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# 3. Настройки
+cp .env.example .env
+# в .env: впиши BOT_TOKEN и замени DATABASE_URL на
+# DATABASE_URL=sqlite+aiosqlite:///bot.sqlite3
+
+# 4. Создать базу и запустить
+alembic upgrade head
+python -m bot
+```
+
+Бот работает, пока открыт терминал. Остановить — `Ctrl+C`, запустить снова — `source .venv/bin/activate && python -m bot`.
+
+## Запуск без Docker (PostgreSQL)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
