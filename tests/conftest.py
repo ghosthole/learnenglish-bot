@@ -61,14 +61,20 @@ class Harness:
         msg = Message(message_id=self._next_id(), date=datetime.now(timezone.utc), chat=CHAT,
                       from_user=TG_USER, text=text, **extra)
         await self.dp.feed_update(self.bot, Update(update_id=self._next_id(), message=msg))
-        return self.fake.sent[start:]
+        return self._check(self.fake.sent[start:])
 
     async def click(self, data: str) -> list[TelegramMethod]:
         start = len(self.fake.sent)
         msg = Message(message_id=self._next_id(), date=datetime.now(timezone.utc), chat=CHAT, text="…")
         cb = CallbackQuery(id=str(self._next_id()), from_user=TG_USER, chat_instance="x", data=data, message=msg)
         await self.dp.feed_update(self.bot, Update(update_id=self._next_id(), callback_query=cb))
-        return self.fake.sent[start:]
+        return self._check(self.fake.sent[start:])
+
+    def _check(self, methods: list[TelegramMethod]) -> list[TelegramMethod]:
+        """Падаем, если бот поймал исключение (обработчик ошибок пишет «Что-то сломалось»)."""
+        for text in self.texts(methods):
+            assert "Что-то сломалось" not in text, "хендлер упал с исключением, см. лог"
+        return methods
 
     def texts(self, methods: list[TelegramMethod]) -> list[str]:
         return [m.text for m in methods if getattr(m, "text", None)]
@@ -107,7 +113,7 @@ async def harness(monkeypatch):
     # Роутеры — глобальные объекты модулей; между тестами отвязываем их от старого диспетчера
     from bot import handlers
     for module in (handlers.start, handlers.words, handlers.grammar, handlers.listening, handlers.quests,
-                   handlers.sprint, handlers.profile, handlers.check):
+                   handlers.sprint, handlers.profile, handlers.check, handlers.fallback):
         module.router._parent_router = None
     dp.include_router(setup_routers())
     yield Harness(dp, bot, fake, sessionmaker)

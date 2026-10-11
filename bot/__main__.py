@@ -5,6 +5,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import BotCommand
 
 from bot.config import get_settings
 from bot.db.base import make_engine, make_sessionmaker
@@ -33,6 +34,18 @@ async def main() -> None:
     scheduler = setup_scheduler(bot, sessionmaker)
     scheduler.start()
 
+    await bot.set_my_commands([
+        BotCommand(command="sprint", description="⚡ 5-минутка"),
+        BotCommand(command="review", description="🔁 Повторить слова"),
+        BotCommand(command="grammar", description="📖 Грамматика"),
+        BotCommand(command="listen", description="🎧 Аудирование"),
+        BotCommand(command="quests", description="🎯 Квесты"),
+        BotCommand(command="check", description="🧪 Проверка"),
+        BotCommand(command="add", description="➕ Добавить слова"),
+        BotCommand(command="profile", description="👤 Профиль"),
+        BotCommand(command="settings", description="⚙️ Настройки"),
+        BotCommand(command="help", description="Все команды"),
+    ])
     await bot.delete_webhook(drop_pending_updates=True)
     try:
         await dp.start_polling(bot)
