@@ -38,9 +38,15 @@ class GrammarQuiz(StatesGroup):
     answering = State()
 
 
+STORY_PREFIX = "story."  # ключи вопросов к аудиоисториям: "story.rainy_day:0"
+
+
 def get_question(key: str) -> tuple[str, Question]:
-    lesson_id, idx = key.rsplit(":", 1)
-    return lesson_id, LESSONS_BY_ID[lesson_id].questions[int(idx)]
+    source_id, idx = key.rsplit(":", 1)
+    if source_id.startswith(STORY_PREFIX):
+        from bot.content.listening import STORIES_BY_ID
+        return source_id, STORIES_BY_ID[source_id.removeprefix(STORY_PREFIX)].questions[int(idx)]
+    return source_id, LESSONS_BY_ID[source_id].questions[int(idx)]
 
 
 def lesson_keys(lesson_id: str) -> list[str]:
@@ -126,7 +132,7 @@ async def cb_open(callback: CallbackQuery, callback_data: GrCb) -> None:
 # ---------- Общий механизм вопросов ----------
 
 async def start_quiz(message: Message, state: FSMContext, keys: list[str], mode: str, lesson: str = "") -> None:
-    """mode: lesson | mistakes | sprint | check"""
+    """mode: lesson | mistakes | sprint | check | listening"""
     await state.update_data(gq={"keys": keys, "idx": 0, "correct": 0, "mode": mode, "lesson": lesson,
                                 "wrong": []})
     await ask_current(message, state)
@@ -154,6 +160,8 @@ async def ask_current(message: Message, state: FSMContext) -> None:
 
 async def record_result(session: AsyncSession, user: User, key: str, ok: bool, mode: str) -> None:
     lesson_id, _ = get_question(key)
+    if lesson_id.startswith(STORY_PREFIX):
+        return  # ошибки в аудировании в «Работу над ошибками» не попадают
     mistake = await session.scalar(select(Mistake).where(Mistake.user_id == user.id, Mistake.item_key == key))
     if not ok:
         if mistake is None:
@@ -206,6 +214,10 @@ async def finish_quiz(message: Message, session: AsyncSession, user: User, state
     if mode == "sprint":
         from bot.handlers.sprint import sprint_after_grammar
         await sprint_after_grammar(message, session, user, state, gq["correct"])
+        return
+    if mode == "listening":
+        from bot.handlers.listening import listening_after_quiz
+        await listening_after_quiz(message, session, user, state, gq)
         return
     if mode == "check":
         from bot.handlers.check import check_after_grammar

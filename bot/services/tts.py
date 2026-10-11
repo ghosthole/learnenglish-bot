@@ -26,7 +26,7 @@ async def synthesize(text: str, voice: str | None = None, rate: str = "-5%") -> 
     key = hashlib.sha1(f"{voice}|{rate}|{text}".encode()).hexdigest()
     path = cache_dir / f"{key}.mp3"
     if not path.exists():
-        communicate = edge_tts.Communicate(text, voice, rate=rate)
+        communicate = edge_tts.Communicate(text, voice, rate=rate, proxy=settings.tts_proxy or None)
         await communicate.save(str(path))
     return path
 

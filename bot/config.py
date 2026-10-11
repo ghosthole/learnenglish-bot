@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     tts_voice: str = "en-US-AriaNeural"
     audio_cache_dir: str = "audio_cache"
+    tts_proxy: str = ""  # например http://user:pass@host:port, если сервис озвучки недоступен напрямую
 
     @property
     def ai_enabled(self) -> bool:
