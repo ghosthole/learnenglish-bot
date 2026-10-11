@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     default_timezone: str = "Europe/Moscow"
 
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-haiku-4-5"
+    anthropic_model: str = "claude-opus-5-5"
+    anthropic_effort: str = "low"  # low | medium | high — глубина размышлений модели
 
     tts_voice: str = "en-US-AriaNeural"
     audio_cache_dir: str = "audio_cache"
