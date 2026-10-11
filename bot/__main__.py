@@ -7,7 +7,9 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from bot.config import get_settings
+from bot.db.base import make_engine, make_sessionmaker
 from bot.handlers import setup_routers
+from bot.middlewares.db import DbSessionMiddleware
 
 
 async def main() -> None:
@@ -17,12 +19,19 @@ async def main() -> None:
     )
     settings = get_settings()
 
+    engine = make_engine(settings.database_url)
+    sessionmaker = make_sessionmaker(engine)
+
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
+    dp.update.outer_middleware(DbSessionMiddleware(sessionmaker))
     dp.include_router(setup_routers())
 
     await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await engine.dispose()
 
 
 if __name__ == "__main__":
