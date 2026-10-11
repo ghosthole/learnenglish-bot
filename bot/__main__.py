@@ -10,6 +10,7 @@ from bot.config import get_settings
 from bot.db.base import make_engine, make_sessionmaker
 from bot.handlers import setup_routers
 from bot.middlewares.db import DbSessionMiddleware
+from bot.services.reminders import setup_scheduler
 from bot.services.seed import seed_words
 
 
@@ -29,10 +30,14 @@ async def main() -> None:
     dp.update.outer_middleware(DbSessionMiddleware(sessionmaker))
     dp.include_router(setup_routers())
 
+    scheduler = setup_scheduler(bot, sessionmaker)
+    scheduler.start()
+
     await bot.delete_webhook(drop_pending_updates=True)
     try:
         await dp.start_polling(bot)
     finally:
+        scheduler.shutdown(wait=False)
         await engine.dispose()
 
 

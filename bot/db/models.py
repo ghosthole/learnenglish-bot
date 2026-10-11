@@ -41,6 +41,8 @@ class User(Base):
     reminders_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     daily_goal_xp: Mapped[int] = mapped_column(Integer, default=50)
     new_words_per_day: Mapped[int] = mapped_column(Integer, default=7)
+    last_reminded_on: Mapped[date | None] = mapped_column(Date)
+    last_streak_warning_on: Mapped[date | None] = mapped_column(Date)
 
     # Геймификация
     xp: Mapped[int] = mapped_column(Integer, default=0)
