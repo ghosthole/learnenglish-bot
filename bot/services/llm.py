@@ -13,3 +13,7 @@ def enabled() -> bool:
 
 async def judge_answer(task: str, answer: str, reference: str) -> CheckResult | None:
     return None  # реализация появится в следующем коммите
+
+
+async def review_writing(task: str, text: str) -> str | None:
+    return None  # реализация появится в следующем коммите
