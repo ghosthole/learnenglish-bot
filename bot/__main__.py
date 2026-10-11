@@ -10,6 +10,7 @@ from bot.config import get_settings
 from bot.db.base import make_engine, make_sessionmaker
 from bot.handlers import setup_routers
 from bot.middlewares.db import DbSessionMiddleware
+from bot.services.seed import seed_words
 
 
 async def main() -> None:
@@ -21,6 +22,7 @@ async def main() -> None:
 
     engine = make_engine(settings.database_url)
     sessionmaker = make_sessionmaker(engine)
+    await seed_words(sessionmaker)
 
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
