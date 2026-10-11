@@ -144,7 +144,7 @@ async def cb_settings_menu(callback: CallbackQuery, callback_data: SetCb, user: 
     if callback_data.value == "time":
         for hour in range(7, 24):
             for minute in (0, 30):
-                kb.button(text=f"{hour:02d}:{minute:02d}", callback_data=SetCb(action="time", value=f"{hour}:{minute}"))
+                kb.button(text=f"{hour:02d}:{minute:02d}", callback_data=SetCb(action="time", value=f"{hour:02d}{minute:02d}"))
         kb.adjust(4)
         title = "⏰ Во сколько напоминать?"
     elif callback_data.value == "tz":
@@ -169,7 +169,7 @@ async def cb_settings_menu(callback: CallbackQuery, callback_data: SetCb, user: 
 async def cb_settings_set(callback: CallbackQuery, callback_data: SetCb, user: User) -> None:
     action, value = callback_data.action, callback_data.value
     if action == "time":
-        hour, minute = map(int, value.split(":"))
+        hour, minute = int(value[:2]), int(value[2:])  # value вида "0830"
         user.reminder_time = time(hour, minute)
         user.reminders_enabled = True
     elif action == "tz" and value in TIMEZONES:
