@@ -1,6 +1,6 @@
 from aiogram import Router
 
-from bot.handlers import grammar, listening, quests, sprint, start, words
+from bot.handlers import grammar, listening, profile, quests, sprint, start, words
 from bot.middlewares.menu import MenuResetMiddleware
 
 
@@ -14,4 +14,5 @@ def setup_routers() -> Router:
     root.include_router(listening.router)
     root.include_router(quests.router)
     root.include_router(sprint.router)
+    root.include_router(profile.router)
     return root
