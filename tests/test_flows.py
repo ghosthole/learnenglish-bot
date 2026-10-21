@@ -198,3 +198,25 @@ async def test_accept_own_translation(harness):
         mistake = await s.scalar(select(Mistake).where(Mistake.item_key == key))
         assert mistake is not None and mistake.fixed
         assert await s.scalar(select(func.count()).select_from(SeenItem)) > 0
+
+
+async def test_new_words_mix_topics(harness):
+    """Новые слова идут вперемешку, а не одной темой; перекос в путешествия выравнивается."""
+    from bot.db.models import Word
+    from bot.services import words as words_service
+
+    await harness.text("/start")
+    async with harness.sessionmaker() as s:
+        user = await s.get(User, 42)
+        first = await words_service.pick_new_words(s, user, 8)
+        assert len({w.topic for w in first}) >= 6
+
+        travel = list(await s.scalars(select(Word).where(Word.topic == "travel")))
+        await words_service.start_learning(s, user, travel)
+        nxt = await words_service.pick_new_words(s, user, 10)
+        assert not any(w.topic == "travel" for w in nxt)
+        assert {"work", "home"} <= {w.topic for w in nxt}
+
+        # Слово, которое уже есть в своих (например, из Anki), не дублируется встроенным
+        await words_service.add_custom_word(s, user, "fix", "чинить")
+        assert all(w.en != "to fix" for w in await words_service.pick_new_words(s, user, 300))

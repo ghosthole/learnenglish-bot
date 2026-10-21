@@ -10,10 +10,13 @@ from bot.db.models import User, UserWord, Word
 from bot.services import srs
 from bot.services.timeutils import start_of_user_day_utc, utcnow
 
-# Порядок, в котором выдаются новые слова: сначала самое нужное под цели
-TOPIC_PRIORITY = ["travel", "daily", "series", "irregular", "food", "feelings",
-                  "connectors", "study", "phrasal", "slang"]
-
+# Как часто давать новые слова из каждой темы: вес 2 — основные темы (быт, работа,
+# путешествия), 1 — дополнительные. Бот выравнивает темы по весам с учётом уже
+# изученных слов, поэтому если ты много учил путешествия, дальше пойдут быт и работа.
+TOPIC_WEIGHTS = {
+    "daily": 2, "home": 2, "work": 2, "travel": 2, "shopping": 2, "city": 2, "health": 2, "food": 2,
+    "study": 1, "irregular": 1, "connectors": 1, "phrasal": 1, "feelings": 1, "series": 1, "slang": 1,
+}
 
 async def count_due(session: AsyncSession, user: User, now: datetime | None = None) -> int:
     now = now or utcnow()
@@ -45,25 +48,42 @@ async def count_new_today(session: AsyncSession, user: User) -> int:
     ) or 0
 
 
+def base_form(en: str) -> str:
+    """«to miss (a flight)» → «miss»: чтобы не давать слово, которое уже есть (например, из Anki)."""
+    en = re.sub(r"\(.*?\)", "", en.lower()).strip()
+    return en.removeprefix("to ").strip()
+
+
 async def pick_new_words(session: AsyncSession, user: User, limit: int) -> list[Word]:
-    """Слова из общего словаря, которых ещё нет у пользователя."""
+    """Слова из общего словаря, которых ещё нет у пользователя, вперемешку по темам."""
     if limit <= 0:
         return []
     known = select(UserWord.word_id).where(UserWord.user_id == user.id)
     candidates = list(await session.scalars(
         select(Word).where(Word.owner_id.is_(None), Word.id.not_in(known))
     ))
+    my_words = list(await session.scalars(
+        select(Word).join(UserWord, UserWord.word_id == Word.id).where(UserWord.user_id == user.id)))
+    my_forms = {base_form(w.en) for w in my_words}
+    candidates = [w for w in candidates if base_form(w.en) not in my_forms]
 
-    def priority(w: Word) -> tuple[int, int]:
-        level = 0 if w.level == "A2" else 1
-        topic = TOPIC_PRIORITY.index(w.topic) if w.topic in TOPIC_PRIORITY else 99
-        return level, topic
+    # Сколько слов каждой темы уже в изучении — от этого зависит, какую тему дать следующей
+    have: dict[str, int] = {}
+    for w in my_words:
+        have[w.topic] = have.get(w.topic, 0) + 1
+    by_topic: dict[str, list[Word]] = {}
+    random.shuffle(candidates)
+    for w in sorted(candidates, key=lambda w: w.level != "A2"):  # внутри темы сначала A2
+        by_topic.setdefault(w.topic, []).append(w)
 
-    candidates.sort(key=priority)
-    # Берём из начала списка, но слегка перемешиваем, чтобы темы чередовались
-    pool = candidates[: limit * 3]
-    random.shuffle(pool)
-    return pool[:limit]
+    picked: list[Word] = []
+    while len(picked) < limit and by_topic:
+        topic = min(by_topic, key=lambda t: ((have.get(t, 0) + 1) / TOPIC_WEIGHTS.get(t, 1), random.random()))
+        picked.append(by_topic[topic].pop(0))
+        have[topic] = have.get(topic, 0) + 1
+        if not by_topic[topic]:
+            del by_topic[topic]
+    return picked
 
 
 async def start_learning(session: AsyncSession, user: User, words: list[Word]) -> list[UserWord]:
