@@ -15,12 +15,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.content.fun import BRAIN_BREAKS
-from bot.content.grammar import LESSONS
+from bot.content.grammar import LESSONS, LESSONS_BY_ID
+from bot.content.sentences import translation_keys
 from bot.db.models import GrammarProgress, Mistake, User
-from bot.handlers.grammar import lesson_keys, start_quiz
+from bot.handlers.grammar import is_grammar_key, lesson_keys, start_quiz
 from bot.handlers.words import esc, send_card
 from bot.keyboards.menu import BTN_SPRINT
 from bot.services import gamification as game
+from bot.services import practice
 from bot.services import words as words_service
 
 router = Router()
@@ -29,26 +31,39 @@ SPRINT_PLAN = ["word", "word", "grammar", "word", "fact", "word", "grammar", "wo
 FAST_SECONDS = 5 * 60
 
 
-async def pick_grammar_key(session: AsyncSession, user: User) -> str:
-    """Сначала — старые ошибки, потом — вопросы из уже начатых уроков, иначе — из первых уроков."""
-    mistakes = list(await session.scalars(
+MISTAKE_COOLDOWN_HOURS = 12  # ошибку, которую только что видел, повторно не даём
+TRANSLATION_SHARE = 0.5  # доля предложений на перевод среди новых грамматических заданий
+
+
+async def pick_grammar_key(session: AsyncSession, user: User, used: set[str]) -> str:
+    """Сначала — старые ошибки (кроме недавно показанных), потом — свежие вопросы
+    и предложения на перевод из уже начатых уроков, иначе — из первых уроков."""
+    mistakes = [k for k in await session.scalars(
         select(Mistake.item_key).where(Mistake.user_id == user.id, Mistake.fixed.is_(False))
-    ))
-    mistakes = [k for k in mistakes if not k.startswith("story.")]
-    if mistakes and random.random() < 0.6:
+    ) if is_grammar_key(k) and k not in used]
+    if mistakes:
+        mistakes = [k for k in mistakes if k not in await practice.seen_recently(
+            session, user, mistakes, MISTAKE_COOLDOWN_HOURS)]
+    if mistakes and random.random() < 0.4:
         return random.choice(mistakes)
+
     started = list(await session.scalars(
         select(GrammarProgress.lesson_id).where(GrammarProgress.user_id == user.id)))
-    lesson_ids = [lid for lid in started if any(lesson.id == lid for lesson in LESSONS)]
+    lesson_ids = [lid for lid in started if lid in LESSONS_BY_ID]
     if not lesson_ids:
         lesson_ids = [lesson.id for lesson in LESSONS[:3]]
-    return random.choice(lesson_keys(random.choice(lesson_ids)))
+    if random.random() < TRANSLATION_SHARE:
+        candidates = [k for lid in lesson_ids for k in translation_keys(lid)]
+    else:
+        candidates = [k for lid in lesson_ids for k in lesson_keys(lid)]
+    picked = await practice.pick_fresh(session, user, candidates, 1, exclude=used)
+    return picked[0] if picked else random.choice(candidates)
 
 
 async def start_sprint(message: Message, state: FSMContext) -> None:
     await state.set_state(None)
     await state.update_data(
-        sprint={"queue": list(SPRINT_PLAN), "started": time.time(), "correct": 0},
+        sprint={"queue": list(SPRINT_PLAN), "started": time.time(), "correct": 0, "used": []},
         review_done=0, review_correct=0, combo=0,
     )
     await message.answer("⚡ <b>5-минутка!</b> 10 быстрых заданий. Успеешь за 5 минут — бонус x2 🏎")
@@ -101,7 +116,9 @@ async def sprint_next(message: Message, session: AsyncSession, user: User, state
             await message.answer(f"✨ Новое слово: <b>{esc(w.en)}</b> — {esc(w.ru)}\n<i>{esc(w.example)}</i>")
         await send_card(message, session, state, cards[0])
     elif item == "grammar":
-        key = await pick_grammar_key(session, user)
+        key = await pick_grammar_key(session, user, set(sprint.get("used", [])))
+        sprint.setdefault("used", []).append(key)
+        await state.update_data(sprint=sprint)
         await start_quiz(message, state, [key], mode="sprint")
     else:  # fact
         kb = InlineKeyboardBuilder()

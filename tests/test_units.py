@@ -95,3 +95,28 @@ def test_content_integrity():
     # callback_data в Telegram ограничена 64 байтами
     for lesson in LESSONS:
         assert len(f"g:practice:{lesson.id}:0".encode()) <= 64
+
+
+def test_translation_bank():
+    from bot.content.grammar import LESSONS_BY_ID
+    from bot.content.sentences import TRANSLATIONS, expand
+
+    assert expand("I {like|love} {cooking|to cook}.") == [
+        "I like cooking.", "I like to cook.", "I love cooking.", "I love to cook."]
+    assert expand("{|Right now }I'm here{ now|}.") == ["I'm here now.", "I'm here.", "Right now I'm here now.",
+                                                     "Right now I'm here."]
+    assert set(TRANSLATIONS) <= set(LESSONS_BY_ID)
+    total = sum(len(v) for v in TRANSLATIONS.values())
+    assert total >= 120, "банк переводов должен быть большим, иначе предложения начнут повторяться"
+    prompts = [q.prompt for qs in TRANSLATIONS.values() for q in qs]
+    assert len(set(prompts)) == len(prompts), "дубли в банке переводов"
+    for qs in TRANSLATIONS.values():
+        for q in qs:
+            assert q.answers and len(q.answers) <= 64, q.prompt
+            assert "{" not in q.answers[0] and "|" not in q.answers[0], q.prompt
+
+
+def test_check_contractions_d():
+    assert check_static("If I'd known, I'd have helped", ["if i had known, i would have helped"])
+    assert check_static("I'd like a coffee", ["I would like a coffee"])
+    assert not check_static("I like a coffee", ["I would like a coffee"])

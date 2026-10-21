@@ -168,3 +168,16 @@ class TestResult(Base):
     total: Mapped[int] = mapped_column(Integer)
     details: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SeenItem(Base):
+    """Когда пользователю последний раз попадался вопрос (чтобы не повторять одно и то же подряд)."""
+
+    __tablename__ = "seen_items"
+    __table_args__ = (UniqueConstraint("user_id", "item_key", name="uq_seen_item"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    item_key: Mapped[str] = mapped_column(String(128))  # тот же ключ, что в Mistake.item_key
+    times_seen: Mapped[int] = mapped_column(Integer, default=1)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

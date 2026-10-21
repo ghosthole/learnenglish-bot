@@ -38,9 +38,21 @@ class CheckResult:
     comment: str = ""  # пояснение от нейросети, если она проверяла
 
 
+def _variants(text: str) -> set[str]:
+    """«'d» бывает и would, и had (I'd go / If I'd known) — пробуем оба прочтения."""
+    norm = normalize(text)
+    if "'d" not in norm:
+        return {norm}
+    parts = re.split(r"'d\b", norm)
+    forms = {parts[0]}
+    for part in parts[1:]:  # каждое «'d» отдельно: If I'd known, I'd have…
+        forms = {f + f" {word}" + part for f in forms for word in ("would", "had")}
+    return forms
+
+
 def check_static(answer: str, accepted: list[str]) -> bool:
-    norm = normalize(answer)
-    return any(norm == normalize(a) for a in accepted)
+    answer_forms = _variants(answer)
+    return any(answer_forms & _variants(a) for a in accepted)
 
 
 async def check_answer(answer: str, accepted: list[str], task: str) -> CheckResult:
