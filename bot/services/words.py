@@ -74,7 +74,7 @@ async def start_learning(session: AsyncSession, user: User, words: list[Word]) -
 
 
 async def add_custom_word(
-    session: AsyncSession, user: User, en: str, ru: str, example: str | None = None
+    session: AsyncSession, user: User, en: str, ru: str, example: str | None = None, topic: str = "custom"
 ) -> tuple[UserWord, bool]:
     """Добавляет слово пользователя в повторение. Возвращает (карточка, создано_ли_новое)."""
     en = en.strip()
@@ -83,7 +83,7 @@ async def add_custom_word(
                            (Word.owner_id == user.id) | Word.owner_id.is_(None))
     )
     if word is None:
-        word = Word(en=en, ru=ru.strip(), example=example, topic="custom", level="B1", owner_id=user.id)
+        word = Word(en=en, ru=ru.strip(), example=example, topic=topic, level="B1", owner_id=user.id)
         session.add(word)
         await session.flush()
 

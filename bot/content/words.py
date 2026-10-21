@@ -246,4 +246,5 @@ TOPIC_NAMES = {
     "irregular": "⚡ Неправильные глаголы",
     "slang": "😎 Сленг",
     "custom": "✍️ Мои слова",
+    "anki": "🗂 Из Anki",
 }

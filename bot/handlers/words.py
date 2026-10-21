@@ -1,5 +1,8 @@
 """Слова: новые слова, повторение (SRS), квиз и добавление своих слов."""
+import asyncio
 import html
+import io
+import logging
 import random
 
 from aiogram import Bot, F, Router
@@ -14,11 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.db.models import User, UserWord
 from bot.keyboards.menu import BTN_WORDS
 from bot.services import gamification as game
+from bot.services import anki
 from bot.services import words as words_service
 from bot.services.srs import Grade
 from bot.services.tts import send_speech
 
 router = Router()
+log = logging.getLogger(__name__)
 
 SESSION_LIMIT = 15  # карточек за один заход: коротко, чтобы не надоедало
 
@@ -30,6 +35,10 @@ class WordCb(CallbackData, prefix="w"):
 
 
 class AddWords(StatesGroup):
+    waiting = State()
+
+
+class AnkiImport(StatesGroup):
     waiting = State()
 
 
@@ -55,6 +64,7 @@ async def words_menu(message: Message, session: AsyncSession, user: User) -> Non
     kb.button(text=f"🔁 Повторить ({due})", callback_data="words:review")
     kb.button(text="✨ Новые слова", callback_data="words:new")
     kb.button(text="➕ Добавить свои", callback_data="words:add")
+    kb.button(text="🗂 Импорт из Anki", callback_data="words:anki")
     kb.adjust(1)
     await message.answer(text, reply_markup=kb.as_markup())
 
@@ -334,3 +344,80 @@ async def on_add_words(message: Message, session: AsyncSession, user: User, stat
         text += "\n" + (await game.award(session, user, added, "custom_words")).text()
     await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🔁 Сразу повторить", callback_data="words:review")]]))
+
+
+
+# ---------- Импорт из Anki ----------
+
+ANKI_HINT = (
+    "🗂 <b>Импорт из Anki</b>\n\n"
+    "1. В Anki на компьютере: <b>Файл → Экспорт</b>\n"
+    "2. Формат <b>«Anki Deck Package (.apkg)»</b> — так перенесётся и прогресс повторений. "
+    "Подойдёт и «Notes in Plain Text (.txt)».\n"
+    "3. Пришли файл сюда документом 📎\n\n"
+    "Слова попадут в «Мои слова». Те, что уже есть в боте, не задублируются. /cancel — отмена"
+)
+ANKI_EXTENSIONS = (".apkg", ".colpkg", ".txt", ".tsv")
+MAX_FILE_SIZE = 20 * 1024 * 1024  # больше Telegram не даёт скачать боту
+
+
+@router.callback_query(F.data == "words:anki")
+async def cb_anki(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(AnkiImport.waiting)
+    await callback.message.answer(ANKI_HINT)
+
+
+@router.message(Command("anki"))
+async def cmd_anki(message: Message, state: FSMContext) -> None:
+    await state.set_state(AnkiImport.waiting)
+    await message.answer(ANKI_HINT)
+
+
+@router.message(AnkiImport.waiting, F.text)
+async def on_anki_text(message: Message) -> None:
+    await message.answer("Жду файл .apkg или .txt документом 📎 /cancel — отмена")
+
+
+# Колоду .apkg принимаем в любой момент, а .txt — только после «Импорт из Anki»
+@router.message(F.document.file_name.lower().endswith((".apkg", ".colpkg")))
+@router.message(AnkiImport.waiting, F.document)
+async def on_anki_file(message: Message, bot: Bot, session: AsyncSession, user: User, state: FSMContext) -> None:
+    doc = message.document
+    name = doc.file_name or ""
+    if not name.lower().endswith(ANKI_EXTENSIONS):
+        await message.answer("Нужен файл .apkg или .txt из Anki (Файл → Экспорт)")
+        return
+    if doc.file_size and doc.file_size > MAX_FILE_SIZE:
+        await message.answer("Файл больше 20 МБ, Telegram не даст его скачать 😕\n"
+                             "Экспортируй без медиа (сними галочку «Include media») или в .txt")
+        return
+    await state.set_state(None)
+    await message.answer("⏳ Читаю колоду…")
+    buffer = io.BytesIO()
+    await bot.download(doc, destination=buffer)
+    try:
+        notes = await asyncio.to_thread(anki.parse_anki_file, buffer.getvalue(), name)
+    except Exception:
+        log.exception("Не удалось разобрать файл Anki %s", name)
+        await message.answer("Не смог прочитать файл 😕 Попробуй экспорт в «Notes in Plain Text (.txt)»")
+        return
+    if not notes:
+        await message.answer("В файле не нашлось слов 🤔 Проверь, что экспортировал нужную колоду.")
+        return
+
+    report = await anki.import_notes(session, user, notes)
+    lines = [f"✅ Импорт из Anki: добавил <b>{report.added}</b> слов в «Мои слова»."]
+    if report.with_progress:
+        lines.append(f"🧠 У {report.with_progress} из них перенёс прогресс повторений из Anki.")
+    if report.already:
+        lines.append(f"↩️ {report.already} уже были в боте — их не трогал.")
+    if report.skipped:
+        lines.append("⚠️ Без перевода, пропустил: " + ", ".join(esc(w) for w in report.skipped[:15])
+                     + "\nДобавь их вручную через ➕ в формате <code>word - перевод</code>.")
+    lines.append(f"\nПовторения разложил по {anki.IMPORT_PER_DAY} карточек в день, чтобы не завалить разом.")
+    if report.added:
+        lines.append((await game.award(session, user, min(report.added, 50), "anki_import")).text())
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔁 Повторить", callback_data="words:review")
+    await message.answer("\n".join(lines), reply_markup=kb.as_markup())
