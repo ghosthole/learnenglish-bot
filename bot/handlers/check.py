@@ -18,7 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.content.grammar import LESSONS, LESSONS_BY_ID, WEAK_SPOT_NAMES
 from bot.db.models import Mistake, TestResult, User, UserWord, Word
-from bot.handlers.grammar import lesson_keys, start_quiz
+from bot.content.sentences import translation_keys
+from bot.handlers.grammar import get_question, is_grammar_key, lesson_id_of, lesson_keys, start_quiz
 from bot.keyboards.menu import BTN_CHECK
 from bot.services import gamification as game
 from bot.services.checker import normalize
@@ -57,13 +58,13 @@ async def check_menu(message: Message, session: AsyncSession, user: User) -> Non
 async def pick_check_keys(session: AsyncSession, user: User) -> list[str]:
     """Вопросы из всех слабых мест: половина — где уже были ошибки, остальное — случайно."""
     mistakes = [k for k in await session.scalars(
-        select(Mistake.item_key).where(Mistake.user_id == user.id)) if k.split(":")[0] in LESSONS_BY_ID]
+        select(Mistake.item_key).where(Mistake.user_id == user.id)) if is_grammar_key(k)]
     random.shuffle(mistakes)
     keys = mistakes[: GRAMMAR_QUESTIONS // 2]
 
     by_spot: dict[str, list[str]] = {}
     for lesson in LESSONS:
-        by_spot.setdefault(lesson.weak_spot, []).extend(lesson_keys(lesson.id))
+        by_spot.setdefault(lesson.weak_spot, []).extend(lesson_keys(lesson.id) + translation_keys(lesson.id))
     spots = list(by_spot)
     i = 0
     while len(keys) < GRAMMAR_QUESTIONS:
@@ -156,7 +157,7 @@ async def finish_check(message: Message, session: AsyncSession, user: User, stat
     # Разбивка по слабым местам из теста
     per_spot: dict[str, list[int]] = {}
     for key in check["grammar_keys"]:
-        spot = LESSONS_BY_ID[key.split(":")[0]].weak_spot
+        spot = LESSONS_BY_ID[lesson_id_of(get_question(key)[0])].weak_spot
         stat = per_spot.setdefault(spot, [0, 0])
         stat[1] += 1
         stat[0] += key not in check["grammar_wrong"]

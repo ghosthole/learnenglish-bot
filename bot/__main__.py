@@ -42,6 +42,7 @@ async def main() -> None:
         BotCommand(command="quests", description="🎯 Квесты"),
         BotCommand(command="check", description="🧪 Проверка"),
         BotCommand(command="add", description="➕ Добавить слова"),
+        BotCommand(command="anki", description="🗂 Импорт из Anki"),
         BotCommand(command="profile", description="👤 Профиль"),
         BotCommand(command="settings", description="⚙️ Настройки"),
         BotCommand(command="help", description="Все команды"),

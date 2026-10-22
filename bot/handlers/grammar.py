@@ -17,19 +17,23 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.content.grammar import LESSONS, LESSONS_BY_ID, Question
+from bot.content.sentences import TR_PREFIX, TRANSLATIONS, translation_keys
 from bot.db.models import GrammarProgress, Mistake, User
 from bot.keyboards.menu import BTN_GRAMMAR
 from bot.services import gamification as game
+from bot.services import practice
 from bot.services.checker import check_answer
 from bot.services.timeutils import utcnow
 
 router = Router()
 
 PASS_SCORE = 70  # процент правильных, чтобы урок считался пройденным
+LESSON_EXTRA_TRANSLATIONS = 2  # сколько свежих предложений из банка добавлять к практике урока
 
 
 class GrCb(CallbackData, prefix="g"):
-    action: str  # open | practice | ans | menu | mistakes
+    action: str  # open | practice | ans | menu | mistakes | accept
+    # для accept здесь ключ вопроса, где ":" заменено на "~" (двоеточие — разделитель в callback_data)
     lesson: str = ""
     value: int = 0
 
@@ -46,7 +50,23 @@ def get_question(key: str) -> tuple[str, Question]:
     if source_id.startswith(STORY_PREFIX):
         from bot.content.listening import STORIES_BY_ID
         return source_id, STORIES_BY_ID[source_id.removeprefix(STORY_PREFIX)].questions[int(idx)]
+    if source_id.startswith(TR_PREFIX):
+        return source_id, TRANSLATIONS[source_id.removeprefix(TR_PREFIX)][int(idx)]
     return source_id, LESSONS_BY_ID[source_id].questions[int(idx)]
+
+
+def lesson_id_of(source_id: str) -> str:
+    """"tr.present_simple" → "present_simple"; для обычных уроков id не меняется."""
+    return source_id.removeprefix(TR_PREFIX)
+
+
+def is_grammar_key(key: str) -> bool:
+    """Ключ существующего вопроса из урока или банка переводов (контент мог поменяться)."""
+    source_id, idx = key.rsplit(":", 1)
+    if source_id.startswith(TR_PREFIX):
+        return int(idx) < len(TRANSLATIONS.get(lesson_id_of(source_id), []))
+    lesson = LESSONS_BY_ID.get(source_id)
+    return lesson is not None and int(idx) < len(lesson.questions)
 
 
 def lesson_keys(lesson_id: str) -> list[str]:
@@ -122,7 +142,8 @@ async def cb_open(callback: CallbackQuery, callback_data: GrCb) -> None:
         return
     await callback.answer()
     kb = InlineKeyboardBuilder()
-    kb.button(text=f"💪 К практике ({len(lesson.questions)} вопросов)",
+    total = len(lesson.questions) + min(LESSON_EXTRA_TRANSLATIONS, len(TRANSLATIONS.get(lesson.id, [])))
+    kb.button(text=f"💪 К практике ({total} вопросов)",
               callback_data=GrCb(action="practice", lesson=lesson.id))
     kb.button(text="⬅️ К урокам", callback_data=GrCb(action="menu"))
     kb.adjust(1)
@@ -159,13 +180,15 @@ async def ask_current(message: Message, state: FSMContext) -> None:
 
 
 async def record_result(session: AsyncSession, user: User, key: str, ok: bool, mode: str) -> None:
-    lesson_id, _ = get_question(key)
-    if lesson_id.startswith(STORY_PREFIX):
+    source_id, _ = get_question(key)
+    await practice.mark_seen(session, user, key)
+    if source_id.startswith(STORY_PREFIX):
         return  # ошибки в аудировании в «Работу над ошибками» не попадают
     mistake = await session.scalar(select(Mistake).where(Mistake.user_id == user.id, Mistake.item_key == key))
     if not ok:
         if mistake is None:
-            session.add(Mistake(user_id=user.id, item_key=key, topic=LESSONS_BY_ID[lesson_id].weak_spot))
+            topic = LESSONS_BY_ID[lesson_id_of(source_id)].weak_spot
+            session.add(Mistake(user_id=user.id, item_key=key, topic=topic))
         else:
             mistake.times_wrong += 1
             mistake.fixed = False
@@ -195,7 +218,13 @@ async def handle_answer(
     text += f"\n<i>{q.explain}</i>"
     if comment:
         text += f"\n\n🤖 {html.escape(comment)}"
-    await message.answer(text)
+    kb = None
+    if not ok and q.kind == "text":
+        # Проверка без ИИ сравнивает с готовыми вариантами и может не знать твой верный вариант
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🙋 Мой вариант тоже верный", callback_data=GrCb(action="accept", lesson=key.replace(":", "~")))
+        kb = kb.as_markup()
+    await message.answer(text, reply_markup=kb)
 
     gq["idx"] += 1
     await state.update_data(gq=gq)
@@ -262,12 +291,15 @@ async def finish_quiz(message: Message, session: AsyncSession, user: User, state
 
 
 @router.callback_query(GrCb.filter(F.action == "practice"))
-async def cb_practice(callback: CallbackQuery, callback_data: GrCb, state: FSMContext) -> None:
+async def cb_practice(callback: CallbackQuery, callback_data: GrCb, session: AsyncSession,
+                      user: User, state: FSMContext) -> None:
     if callback_data.lesson not in LESSONS_BY_ID:
         await callback.answer("Урок не найден")
         return
     await callback.answer()
-    keys = lesson_keys(callback_data.lesson)
+    # Вопросы урока + пара свежих предложений на перевод, чтобы при повторе было что-то новое
+    keys = lesson_keys(callback_data.lesson) + await practice.pick_fresh(
+        session, user, translation_keys(callback_data.lesson), LESSON_EXTRA_TRANSLATIONS)
     random.shuffle(keys)
     await start_quiz(callback.message, state, keys, mode="lesson", lesson=callback_data.lesson)
 
@@ -278,7 +310,7 @@ async def cb_mistakes(callback: CallbackQuery, session: AsyncSession, user: User
         select(Mistake.item_key).where(Mistake.user_id == user.id, Mistake.fixed.is_(False))
         .order_by(Mistake.times_wrong.desc(), Mistake.updated_at).limit(8)
     ))
-    keys = [k for k in rows if k.rsplit(":", 1)[0] in LESSONS_BY_ID]
+    keys = [k for k in rows if is_grammar_key(k)]
     await callback.answer()
     if not keys:
         await callback.message.answer("Ошибок нет, ты чист 😇")
@@ -315,3 +347,15 @@ async def on_text_answer(message: Message, session: AsyncSession, user: User, st
     await message.bot.send_chat_action(message.chat.id, "typing")
     result = await check_answer(message.text, q.answers, task=q.prompt)
     await handle_answer(message, session, user, state, ok=result.ok, comment=result.comment)
+
+
+@router.callback_query(GrCb.filter(F.action == "accept"))
+async def cb_accept(callback: CallbackQuery, callback_data: GrCb, session: AsyncSession, user: User) -> None:
+    """Пользователь уверен, что его перевод верный: убираем вопрос из «Работы над ошибками»."""
+    mistake = await session.scalar(
+        select(Mistake).where(Mistake.user_id == user.id, Mistake.item_key == callback_data.lesson.replace("~", ":")))
+    if mistake is not None:
+        mistake.fixed = True
+        mistake.updated_at = utcnow()
+    await callback.answer("Ок, засчитал 👍 В ошибки не пойдёт")
+    await callback.message.edit_reply_markup(reply_markup=None)
